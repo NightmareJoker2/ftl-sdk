@@ -2,7 +2,7 @@
 #define __FTL_INTERNAL
 #include "ftl.h"
 #include "ftl_private.h"
-#include <curl/curl.h>
+#include "curl.h"
 
 static BOOL _get_chan_id_and_key(const char *stream_key, uint32_t *chan_id, char *key);
 static int _lookup_ingest_ip(const char *ingest_location, char *ingest_ip);

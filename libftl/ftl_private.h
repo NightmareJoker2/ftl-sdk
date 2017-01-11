@@ -130,7 +130,7 @@ typedef struct {
 	struct timeval insert_time;
 	struct timeval xmit_time;
 	int sn;
-	int first;/*first packet in frame*/
+	int first;/*first packet in frame*/x
 	int last; /*last packet in frame*/
 	OS_MUTEX mutex;
 }nack_slot_t;

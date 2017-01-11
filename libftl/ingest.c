@@ -1,6 +1,6 @@
 #include "ftl.h"
 #include "ftl_private.h"
-#include <curl/curl.h>
+#include "curl.h"
 #include <jansson.h>
 
 OS_THREAD_ROUTINE _ingest_get_hosts(ftl_stream_configuration_private_t *ftl);
