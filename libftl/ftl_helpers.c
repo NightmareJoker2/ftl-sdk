@@ -153,6 +153,30 @@ const char * ftl_video_codec_to_string(ftl_video_codec_t codec) {
   return "";
 }
 
+void ftl_set_state(ftl_stream_configuration_private_t *ftl, ftl_state_t state) {
+	os_lock_mutex(&ftl->state_mutex);
+	ftl->state |= state;
+	os_unlock_mutex(&ftl->state_mutex);
+}
+
+void ftl_clear_state(ftl_stream_configuration_private_t *ftl, ftl_state_t state) {
+	os_lock_mutex(&ftl->state_mutex);
+	ftl->state &= ~state;
+	os_unlock_mutex(&ftl->state_mutex);
+}
+
+BOOL ftl_get_state(ftl_stream_configuration_private_t *ftl, ftl_state_t state) {
+	BOOL is_set;
+		
+	os_lock_mutex(&ftl->state_mutex);
+	is_set = ftl->state & state;
+	os_unlock_mutex(&ftl->state_mutex);
+
+	return is_set;
+
+}
+
+
 BOOL is_legacy_ingest(ftl_stream_configuration_private_t *ftl) {
 	return ftl->media.assigned_port == FTL_UDP_MEDIA_PORT;
 }
@@ -160,10 +184,6 @@ BOOL is_legacy_ingest(ftl_stream_configuration_private_t *ftl) {
 ftl_status_t enqueue_status_msg(ftl_stream_configuration_private_t *ftl, ftl_status_msg_t *stats_msg) {
 	status_queue_elmt_t *elmt;
 	ftl_status_t retval = FTL_SUCCESS;
-
-	if (!ftl->async_queue_alive) {
-		return FTL_NOT_INITIALIZED;
-	}
 
 	os_lock_mutex(&ftl->status_q.mutex);
 
@@ -210,16 +230,14 @@ ftl_status_t dequeue_status_msg(ftl_stream_configuration_private_t *ftl, ftl_sta
 	status_queue_elmt_t *elmt;
 	ftl_status_t retval = FTL_SUCCESS;
 
-	if (!ftl->async_queue_alive) {
+	if (!ftl_get_state(ftl, FTL_STATUS_QUEUE)) {
 		return FTL_NOT_INITIALIZED;
 	}
+
+	ftl->status_q.thread_waiting = 1;
 
 	if (os_semaphore_pend(&ftl->status_q.sem, ms_timeout) < 0) {
 		return FTL_STATUS_TIMEOUT;
-	}
-
-	if (!ftl->async_queue_alive) {
-		return FTL_NOT_INITIALIZED;
 	}
 
 	os_lock_mutex(&ftl->status_q.mutex);
@@ -236,6 +254,8 @@ ftl_status_t dequeue_status_msg(ftl_stream_configuration_private_t *ftl, ftl_sta
 	}
 
 	os_unlock_mutex(&ftl->status_q.mutex);
+
+	ftl->status_q.thread_waiting = 0;
 
 	return retval;
 }
