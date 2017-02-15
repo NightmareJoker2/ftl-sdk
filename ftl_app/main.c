@@ -63,6 +63,8 @@ int WINAPI ftl_status_thread(LPVOID data);
 static void *ftl_status_thread(void *data);
 #endif
 
+int speedtest_duration = 0;
+
 int main(int argc, char **argv)
 {
   ftl_status_t status_code;
@@ -74,7 +76,6 @@ int main(int argc, char **argv)
   int fps_num = 30;
   int fps_den = 1;
   int speedtest_kbps = 1000;
-  int speedtest_duration = 0;
   int c;
   int audio_pps = 50;
   int target_bw_kbps = 0;
@@ -217,10 +218,15 @@ int main(int argc, char **argv)
   if (speedtest_duration)
   {
     printf("Running Speed test: sending %d kbps for %d ms", speedtest_kbps, speedtest_duration);
-    float packetloss_rate = 0;
-    packetloss_rate = ftl_ingest_speed_test(&handle, speedtest_kbps, speedtest_duration);
-    sleep_ms(1);
-    printf("Running Speed complete: packet loss rate was %3.2f, estimated peak bitrate is %3.2f kbps\n", packetloss_rate, (float)speedtest_kbps * (100.f - packetloss_rate) / 100);
+	speed_test_t results;
+	if ((status_code = ftl_ingest_speed_test_ex(&handle, speedtest_kbps, speedtest_duration, &results)) == FTL_SUCCESS) {
+		printf("Speed test completed: Peak kbps %d, initial rtt %d, final rtt %d, %3.2f lost packets\n", 
+			results.peak_kbps, results.starting_rtt, results.ending_rtt, (float)results.lost_pkts * 100.f / (float)results.pkts_sent);
+	}
+	else {
+		printf("Speed test failed with: %s\n", ftl_status_code_to_string(status_code));
+	}
+
     goto cleanup;
   }
 
@@ -378,6 +384,12 @@ static void *ftl_status_thread(void *data)
       {
         continue;
       }
+
+	  /*dont reconnect for speed test*/
+	  if (speedtest_duration) {
+		  continue;
+	  }
+
       //attempt reconnection
       while (retries-- > 0)
       {
@@ -404,10 +416,18 @@ static void *ftl_status_thread(void *data)
     {
       ftl_packet_stats_msg_t *p = &status.msg.pkt_stats;
 
-      printf("Avg packet send per second %3.1f, nack requests %d, avg transmit delay %d (min: %d, max: %d)\n",
+      printf("Avg packet send per second %3.1f, total nack requests %d\n",
              (float)p->sent * 1000.f / p->period,
-             p->nack_reqs, p->avg_xmit_delay, p->min_xmit_delay, p->max_xmit_delay);
+             p->nack_reqs);
     }
+	else if (status.type == FTL_STATUS_VIDEO_PACKETS_INSTANT)
+	{
+		ftl_packet_stats_instant_msg_t *p = &status.msg.ipkt_stats;
+
+		printf("avg transmit delay %dms (min: %d, max: %d), avg rtt %dms (min: %d, max: %d)\n",
+			p->avg_xmit_delay, p->min_xmit_delay, p->max_xmit_delay,
+			p->avg_rtt, p->min_rtt, p->max_rtt);
+	}
     else if (status.type == FTL_STATUS_VIDEO)
     {
       ftl_video_frame_stats_msg_t *v = &status.msg.video_stats;

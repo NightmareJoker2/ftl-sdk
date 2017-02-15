@@ -55,15 +55,15 @@
 #define MAX_KEY_LEN 100
 #define VIDEO_PTYPE 96
 #define AUDIO_PTYPE 97
-#define SOCKET_RECV_TIMEOUT_MS 1000
+#define SOCKET_RECV_TIMEOUT_MS 2000
 #define SOCKET_SEND_TIMEOUT_MS 1000
-#define KEEPALIVE_FREQUENCY_MS 30000
+#define KEEPALIVE_FREQUENCY_MS 5000
 #define MAX_PACKET_BUFFER 1500  //Max length of buffer
 #define MAX_MTU 1392
 #define FTL_UDP_MEDIA_PORT 8082   //legacy port
 #define RTP_HEADER_BASE_LEN 12
 #define RTP_FUA_HEADER_LEN 2
-#define NACK_RB_SIZE (65536/8) //must be evenly divisible by 2^16
+#define NACK_RB_SIZE (2048) //must be evenly divisible by 2^16
 #define NACK_RTT_AVG_SECONDS 5
 #define MAX_STATUS_MESSAGE_QUEUED 10
 #define MAX_FRAME_SIZE_ELEMENTS 64 //must be a minimum of 3
@@ -71,7 +71,7 @@
 #define VIDEO_RTP_TS_CLOCK_HZ 90000
 #define AUDIO_SAMPLE_RATE 48000
 #define AUDIO_PACKET_DURATION_MS 20
-#define IPV4_ADDR_ASCII_LEN 24
+#define IPV4_ADDR_ASCII_LEN INET_ADDRSTRLEN 
 #define INGEST_LIST_URI "https://beam.pro/api/v1/ingests/best"
 #define INGEST_LOAD_PORT 8079
 #define INGEST_PING_PORT 8079
@@ -107,6 +107,8 @@ typedef enum {
 	FTL_RX_THRD = 0x0040,
 	FTL_TX_THRD = 0x0080,
 	FTL_TX_PING_PKTS = 0x0100,
+	FTL_SPEED_TEST = 0x0200,
+	FTL_DISCONNECT_IN_PROGRESS = 0x1000
 }ftl_state_t;
 
 #ifndef _WIN32
@@ -170,6 +172,10 @@ typedef struct {
 	int pkt_xmit_delay_min;
 	int total_xmit_delay;
 	int xmit_delay_samples;
+	int pkt_rtt_max;
+	int pkt_rtt_min;
+	int total_rtt;
+	int rtt_samples;
 	int current_frame_size;
 	int max_frame_size;
 }media_stats_t;
@@ -240,6 +246,8 @@ typedef struct {
   SOCKET ingest_socket;
   ftl_state_t state;
   OS_MUTEX state_mutex;
+  OS_MUTEX disconnect_mutex;
+  char *ingest_hostname;
   char ingest_ip[IPV4_ADDR_ASCII_LEN];//ipv4 only
   uint32_t channel_id;
   char *key;
@@ -324,6 +332,7 @@ BOOL ftl_get_state(ftl_stream_configuration_private_t *ftl, ftl_state_t state);
 BOOL is_legacy_ingest(ftl_stream_configuration_private_t *ftl);
 ftl_status_t dequeue_status_msg(ftl_stream_configuration_private_t *ftl, ftl_status_msg_t *stats_msg, int ms_timeout);
 ftl_status_t enqueue_status_msg(ftl_stream_configuration_private_t *ftl, ftl_status_msg_t *stats_msg);
+ftl_status_t _set_ingest_ip(ftl_stream_configuration_private_t *ftl);
 
 ftl_status_t _init_control_connection(ftl_stream_configuration_private_t *ftl);
 ftl_status_t _ingest_connect(ftl_stream_configuration_private_t *stream_config);
@@ -336,7 +345,7 @@ ftl_status_t media_init(ftl_stream_configuration_private_t *ftl);
 ftl_status_t media_destroy(ftl_stream_configuration_private_t *ftl);
 int media_send_video(ftl_stream_configuration_private_t *ftl, int64_t dts_usec, uint8_t *data, int32_t len, int end_of_frame);
 int media_send_audio(ftl_stream_configuration_private_t *ftl, int64_t dts_usec, uint8_t *data, int32_t len);
-int media_speed_test(ftl_stream_configuration_private_t *ftl, int speed_kbps, int duration_ms);
+ftl_status_t media_speed_test(ftl_stream_configuration_private_t *ftl, int speed_kbps, int duration_ms, speed_test_t *results);
 ftl_status_t internal_ingest_disconnect(ftl_stream_configuration_private_t *ftl);
 ftl_status_t internal_ftl_ingest_destroy(ftl_stream_configuration_private_t *ftl);
 void sleep_ms(int ms);

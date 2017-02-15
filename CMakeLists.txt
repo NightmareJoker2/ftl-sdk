@@ -2,6 +2,8 @@ cmake_minimum_required (VERSION 2.8.0)
 enable_language(C)
 project(libftl)
 
+option(DISABLE_AUTO_INGEST "Set to TRUE to disable auto ingest feature which removes curl and jansson dependancies" FALSE)
+
 find_package(Threads REQUIRED)
 
 set (CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
@@ -9,7 +11,15 @@ set (CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 
 FIND_PACKAGE(CURL)
 
-if (NOT CURL_FOUND)
+if (DISABLE_AUTO_INGEST)
+add_definitions(-DDISABLE_AUTO_INGEST)
+endif()
+
+if (NOT CURL_FOUND AND NOT DISABLE_AUTO_INGEST)
+SET(CURL_DISABLE_NTLM ON CACHE BOOL "Disabling NTLM")
+SET(CURL_DISABLE_TELNET ON CACHE BOOL "Disabling Telnet")
+SET(CURL_DISABLE_LDAP ON CACHE BOOL "Disabling Ldap")
+SET(CURL_DISABLE_LDAPS ON CACHE BOOL "Disabling secure ldap")
 SET(BUILD_CURL_EXE OFF CACHE BOOL "Building libcurl")
 SET(HTTP_ONLY ON CACHE BOOL "using compiling HTTP")
 SET(BUILD_TESTING OFF CACHE BOOL "Not building Tests")
@@ -20,11 +30,15 @@ endif()
 MESSAGE( STATUS "Curl include dir: " ${CURL_INCLUDE_DIRS}) 
 include_directories(${CURL_INCLUDE_DIRS})
 
+if (NOT DISABLE_AUTO_INGEST)
 SET(JANSSON_BUILD_DOCS OFF CACHE BOOL "Jansson docs off")
 SET(JANSSON_WITHOUT_TESTS ON CACHE BOOL "Jansson build without tests")
 SET(JANSSON_EXAMPLES OFF CACHE BOOL "Jansson disable examples")
+SET(USE_WINDOWS_CRYPTOAPI off)
 add_subdirectory(libjansson)
 include_directories(${CMAKE_CURRENT_BINARY_DIR}/libjansson/include)
+SET(JANSSON_LIBRARIES jansson)
+endif()
 
 include_directories(libftl libftl/gettimeofday)
 
@@ -33,7 +47,8 @@ if (WIN32)
   set(FTL_PLATFORM_FILES ftl_app/win32/xgetopt.c
                             ftl_app/win32/xgetopt.h
                             ftl_app/win32/ctrlc_handler.c)
-  set(FTL_PLATFORM_LIBS kernel32 user32 gdi32 advapi32 )
+  #set(FTL_PLATFORM_LIBS kernel32 user32 gdi32 advapi32 )
+  #set(FTL_PLATFORM_LIBS ws2_32 )
   set(FTLSDK_PLATFORM_FILES libftl/win32/socket.c
                       libftl/win32/socket.h
 	                    libftl/win32/threads.c
@@ -59,7 +74,7 @@ add_library(ftl SHARED libftl/hmac/hmac.c
                        libftl/handshake.c
                        libftl/ingest.c
                        libftl/ftl_helpers.c
-					             libftl/media.c
+					   libftl/media.c
                        libftl/logging.c
                        libftl/ftl.h
                        libftl/ftl_private.h
@@ -67,9 +82,9 @@ add_library(ftl SHARED libftl/hmac/hmac.c
 set_target_properties(ftl PROPERTIES VERSION "0.5.0")
 set_target_properties(ftl PROPERTIES SOVERSION 0)
 
-target_link_libraries(ftl ${CURL_LIBRARIES} jansson)
+target_link_libraries(ftl ${CURL_LIBRARIES} ${JANSSON_LIBRARIES})
 if(WIN32)
-  target_link_libraries(ftl Windowsapp)
+  target_link_libraries(ftl ws2_32)
 endif()
 
 add_executable(ftl_app
@@ -81,7 +96,7 @@ add_executable(ftl_app
 	             ftl_app/gettimeofday.h
                ${FTL_PLATFORM_FILES})
 
-target_link_libraries(ftl_app ftl ${CURL_LIBRARIES} jansson ${CMAKE_THREAD_LIBS_INIT} ${FTL_PLATFORM_LIBS})
+target_link_libraries(ftl_app ftl ${CURL_LIBRARIES} ${JANSSON_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT} ${FTL_PLATFORM_LIBS})
 target_include_directories(ftl_app PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/ftl_app)
 
 # Install rules

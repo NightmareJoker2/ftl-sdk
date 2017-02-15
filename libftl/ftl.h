@@ -78,7 +78,9 @@ typedef enum {
 	FTL_REGION_UNSUPPORTED,//the region you are attempting to stream from is not authorized to stream by local governments
 	FTL_NO_MEDIA_TIMEOUT,
 	FTL_USER_DISCONNECT,
-	FTL_INGEST_NO_RESPONSE
+	FTL_INGEST_NO_RESPONSE,
+	FTL_NO_PING_RESPONSE,
+	FTL_SPEED_TEST_ABORTED
 } ftl_status_t;
 
 typedef enum {
@@ -145,6 +147,17 @@ typedef struct {
 } ftl_ingest_params_t;
 
 typedef struct {
+	int pkts_sent;
+	int nack_requests;
+	int lost_pkts;
+	int starting_rtt;
+	int ending_rtt;
+	int bytes_sent;
+	int duration_ms;
+	int peak_kbps;
+}speed_test_t;
+
+typedef struct {
 	void* priv;
 } ftl_handle_t;
 
@@ -153,6 +166,7 @@ typedef enum {
 	FTL_STATUS_LOG,
 	FTL_STATUS_EVENT,
 	FTL_STATUS_VIDEO_PACKETS,
+	FTL_STATUS_VIDEO_PACKETS_INSTANT,
 	FTL_STATUS_AUDIO_PACKETS,
 	FTL_STATUS_VIDEO,
 	FTL_STATUS_AUDIO,
@@ -193,10 +207,17 @@ typedef struct {
 	int64_t lost;
 	int64_t recovered;
 	int64_t late;
+}ftl_packet_stats_msg_t;
+
+typedef struct {
+	int64_t period; //period of time in ms the stats were collected over
+	int min_rtt;
+	int max_rtt;
+	int avg_rtt;
 	int min_xmit_delay;
 	int max_xmit_delay;
 	int avg_xmit_delay;
-}ftl_packet_stats_msg_t;
+}ftl_packet_stats_instant_msg_t;
 
 typedef struct {
 	int64_t period; //period of time in ms the stats were collected over
@@ -216,6 +237,7 @@ typedef struct {
 		ftl_status_log_msg_t log;
 		ftl_status_event_msg_t event;
 		ftl_packet_stats_msg_t pkt_stats;
+		ftl_packet_stats_instant_msg_t ipkt_stats;
 		ftl_video_frame_stats_msg_t video_stats;
 	} msg;
 }ftl_status_msg_t;
@@ -243,6 +265,7 @@ FTL_API ftl_status_t ftl_ingest_create(ftl_handle_t *ftl_handle, ftl_ingest_para
 FTL_API ftl_status_t ftl_ingest_connect(ftl_handle_t *ftl_handle);
 
 FTL_API int ftl_ingest_speed_test(ftl_handle_t *ftl_handle, int speed_kbps, int duration_ms);
+FTL_API ftl_status_t ftl_ingest_speed_test_ex(ftl_handle_t *ftl_handle, int speed_kbps, int duration_ms, speed_test_t *results);
 
 FTL_API int ftl_ingest_send_media(ftl_handle_t *ftl_handle, ftl_media_type_t media_type, uint8_t *data, int32_t len, int end_of_frame);
 FTL_API int ftl_ingest_send_media_dts(ftl_handle_t *ftl_handle, ftl_media_type_t media_type, int64_t dts_usec, uint8_t *data, int32_t len, int end_of_frame);

@@ -22,15 +22,20 @@ static void _update_xmit_level(ftl_stream_configuration_private_t *ftl, int *tra
 
 void _clear_stats(media_stats_t *stats);
 static int _update_stats(ftl_stream_configuration_private_t *ftl);
-static int _send_pkt_stats(ftl_stream_configuration_private_t *ftl, ftl_media_component_common_t *mc, float interval_ms);
-static int _send_video_stats(ftl_stream_configuration_private_t *ftl, ftl_media_component_common_t *mc, float interval_ms);
+static int _send_pkt_stats(ftl_stream_configuration_private_t *ftl, ftl_media_component_common_t *mc, int interval_ms);
+static int _send_video_stats(ftl_stream_configuration_private_t *ftl, ftl_media_component_common_t *mc, int interval_ms);
+static int _send_instant_pkt_stats(ftl_stream_configuration_private_t *ftl, ftl_media_component_common_t *mc, int interval_ms);
 
 ftl_status_t media_init(ftl_stream_configuration_private_t *ftl) {
 
 	ftl_media_config_t *media = &ftl->media;
-	struct hostent *server = NULL;
+	unsigned char buf[sizeof(struct in_addr)];
 	ftl_status_t status = FTL_SUCCESS;
 	int idx;
+
+	if (ftl_get_state(ftl, FTL_MEDIA_READY)) {
+		return FTL_SUCCESS;
+	}
 
 	do {
 		os_init_mutex(&media->mutex);
@@ -47,15 +52,13 @@ ftl_status_t media_init(ftl_stream_configuration_private_t *ftl) {
 
 		FTL_LOG(ftl, FTL_LOG_INFO, "Socket created\n");
 
-		if ((server = gethostbyname(ftl->ingest_ip)) == NULL) {
-			FTL_LOG(ftl, FTL_LOG_ERROR, "No such host as %s\n", ftl->ingest_ip);
-			status = FTL_DNS_FAILURE;
+		if (inet_pton(AF_INET, ftl->ingest_ip, buf) == 0) {
 			break;
 		}
 
 		//Prepare the sockaddr_in structure
 		media->server_addr.sin_family = AF_INET;
-		memcpy((char *)&media->server_addr.sin_addr.s_addr, (char *)server->h_addr, server->h_length);
+		memcpy((char *)&media->server_addr.sin_addr.s_addr, (char *)buf, sizeof(buf));
 		media->server_addr.sin_port = htons(media->assigned_port);
 
 		media->max_mtu = MAX_MTU;
@@ -109,6 +112,8 @@ ftl_status_t media_init(ftl_stream_configuration_private_t *ftl) {
 			status = FTL_MALLOC_FAILURE;
 			break;
 		}
+
+		ftl_clear_state(ftl, FTL_SPEED_TEST);
 
 		ftl_set_state(ftl, FTL_MEDIA_READY);
 
@@ -182,7 +187,6 @@ ftl_status_t _internal_media_destroy(ftl_stream_configuration_private_t *ftl) {
 	_nack_destroy(audio_comp);
 
 	return status;
-
 }
 
 ftl_status_t media_destroy(ftl_stream_configuration_private_t *ftl) {
@@ -192,6 +196,10 @@ ftl_status_t media_destroy(ftl_stream_configuration_private_t *ftl) {
 	}
 
 	ftl_clear_state(ftl, FTL_MEDIA_READY);
+
+	while (ftl_get_state(ftl, FTL_SPEED_TEST)) {
+		sleep_ms(250);
+	}
 
 	return _internal_media_destroy(ftl);
 }
@@ -249,6 +257,10 @@ void _clear_stats(media_stats_t *stats) {
 	stats->pkt_xmit_delay_min = 10000;
 	stats->total_xmit_delay = 0;
 	stats->xmit_delay_samples = 0;
+	stats->pkt_rtt_max = 0;
+	stats->pkt_rtt_min = 10000;
+	stats->total_rtt = 0;
+	stats->rtt_samples = 0;
 	stats->current_frame_size = 0;
 	stats->max_frame_size = 0;
 	gettimeofday(&stats->start_time, NULL);
@@ -277,10 +289,13 @@ void _update_timestamp(ftl_stream_configuration_private_t *ftl, ftl_media_compon
 	}
 }
 
-int media_speed_test(ftl_stream_configuration_private_t *ftl, int speed_kbps, int duration_ms) {
+ftl_status_t media_speed_test(ftl_stream_configuration_private_t *ftl, int speed_kbps, int duration_ms, speed_test_t *results) {
 	ftl_media_component_common_t *mc = &ftl->audio.media_component;
 	ftl_media_config_t *media = &ftl->media;
 	int64_t bytes_sent = 0;
+	int error = 0;
+	int effective_kbps = -1;
+	ftl_status_t retval = FTL_SPEED_TEST_ABORTED;
 	int64_t transmit_level = MAX_MTU;
 	unsigned char data[MAX_MTU];
 	int bytes_per_ms;
@@ -293,17 +308,19 @@ int media_speed_test(ftl_stream_configuration_private_t *ftl, int speed_kbps, in
 	ping_pkt_t *ping;
 	nack_slot_t slot;
 	uint8_t fmt = 1; //generic nack
-	uint8_t ptype = PING_PTYPE; //TODO: made up, need to find something valid
+	uint8_t ptype = PING_PTYPE;
 	int wait_retries;
 	int initial_rtt, final_rtt;
 
+	ftl_set_state(ftl, FTL_SPEED_TEST);
+
 	if (!ftl_get_state(ftl, FTL_MEDIA_READY)) {
-		return 0;
+		ftl_clear_state(ftl, FTL_SPEED_TEST);
+		return retval;
 	}
 
 	media_enable_nack(ftl, mc->ssrc, FALSE);
 	ftl_clear_state(ftl, FTL_TX_PING_PKTS);
-
 
 	ping = (ping_pkt_t*)slot.packet;
 
@@ -324,13 +341,15 @@ int media_speed_test(ftl_stream_configuration_private_t *ftl, int speed_kbps, in
 
 	initial_rtt = ftl->media.last_rtt_delay;
 
+	results->starting_rtt = (wait_retries <= 0) ? -1 : ftl->media.last_rtt_delay;
+
 	int64_t initial_nack_cnt = mc->stats.nack_requests;
 
 	gettimeofday(&start_tv, NULL);
 
 	bytes_per_ms = speed_kbps * 1000 / 8 / 1000;
 
-	while (total_ms < duration_ms) {
+	while (total_ms < duration_ms && !error) {
 
 		if (transmit_level <= 0) {
 			sleep_ms(MAX_MTU / bytes_per_ms + 1);
@@ -346,48 +365,64 @@ int media_speed_test(ftl_stream_configuration_private_t *ftl, int speed_kbps, in
 
 		while (transmit_level > 0) {
 			pkts_sent++;
-			bytes_sent = media_send_audio(ftl, 0, data, sizeof(data));
+			if ((bytes_sent = media_send_audio(ftl, 0, data, sizeof(data))) < sizeof(data)) {
+				error = 1;
+				break;
+			}
 			total_sent += bytes_sent;
 			transmit_level -= bytes_sent;
 		}
 	}
 
-	ftl->media.last_rtt_delay = -1;
-	gettimeofday(&ping->xmit_time, NULL);
-	_media_send_slot(ftl, &slot);
+	if (!error) {
+		ftl->media.last_rtt_delay = -1;
+		gettimeofday(&ping->xmit_time, NULL);
+		_media_send_slot(ftl, &slot);
 
-	wait_retries = 2000 / PING_TX_INTERVAL_MS; // waiting up to 2s for ping to come back
-	while (ftl->media.last_rtt_delay < 0 && wait_retries-- > 0) {
-		sleep_ms(PING_TX_INTERVAL_MS);
-	};
+		wait_retries = 2000 / PING_TX_INTERVAL_MS; // waiting up to 2s for ping to come back
+		while (ftl->media.last_rtt_delay < 0 && wait_retries-- > 0) {
+			sleep_ms(PING_TX_INTERVAL_MS);
+		};
 
-	final_rtt = ftl->media.last_rtt_delay;
+		final_rtt = ftl->media.last_rtt_delay;
+		results->ending_rtt = (wait_retries <= 0) ? -1 : ftl->media.last_rtt_delay;
 
-	//if we lost a ping packet ignore rtt, if the final rtt is lower than the initial ignore
-	if (initial_rtt < 0 || final_rtt < 0 || final_rtt < initial_rtt) {
-		initial_rtt = final_rtt = 0;
+		//if we lost a ping packet ignore rtt, if the final rtt is lower than the initial ignore
+		if (initial_rtt < 0 || final_rtt < 0 || final_rtt < initial_rtt) {
+			initial_rtt = final_rtt = 0;
+		}
+
+		//if we didnt get the last ping packet assume the worst for rtt
+		if (wait_retries <= 0) {
+			initial_rtt = 0;
+			final_rtt = 2000;
+		}
+
+		FTL_LOG(ftl, FTL_LOG_ERROR, "Sent %d bytes in %d ms (%3.2f kbps) lost %d packets (first rtt: %d, last %d). Estimated peak bitrate %d kbps\n", total_sent, total_ms, (float)total_sent * 8.f * 1000.f / (float)total_ms, mc->stats.nack_requests - initial_nack_cnt, initial_rtt, final_rtt, total_sent * 8 / (total_ms + final_rtt - initial_rtt));
+
+		int64_t lost_pkts = mc->stats.nack_requests - initial_nack_cnt;
+		float pkt_loss_percent = (float)lost_pkts / (float)pkts_sent;
+
+		float adjusted_bytes_sent = (float)total_sent * (1.f - pkt_loss_percent);
+		int64_t actual_send_time = total_ms + final_rtt - initial_rtt;
+		effective_kbps = (int)(adjusted_bytes_sent * 8.f * 1000.f / (float)actual_send_time) / 1000.f;
+
+		results->pkts_sent = (int)pkts_sent;
+		results->nack_requests = (int)lost_pkts;
+		results->lost_pkts = (int)lost_pkts;
+		results->bytes_sent = (int)total_sent;
+		results->duration_ms = (int)actual_send_time;
+		results->peak_kbps = effective_kbps;
+
+		retval = FTL_SUCCESS;
 	}
-
-	//if we didnt get the last ping packet assume the worst for rtt
-	if (wait_retries <= 0) {
-		initial_rtt = 0;
-		final_rtt = 2000;
-	}
-
-	FTL_LOG(ftl, FTL_LOG_ERROR, "Sent %d bytes in %d ms (%3.2f kbps) lost %d packets (first rtt: %d, last %d). Estimated peak bitrate %d kbps\n", total_sent, total_ms, (float)total_sent * 8.f * 1000.f / (float)total_ms, mc->stats.nack_requests - initial_nack_cnt, initial_rtt, final_rtt, total_sent * 8 / (total_ms + final_rtt - initial_rtt));
-
-	int lost_pkts = mc->stats.nack_requests - initial_nack_cnt;
-	float pkt_loss_percent = (float)lost_pkts / (float)pkts_sent;
-
-	float adjusted_bytes_sent = (float)total_sent * (1.f-pkt_loss_percent);
-	int actual_send_time = total_ms + final_rtt - initial_rtt;
-	int effective_kbps = adjusted_bytes_sent * 8.f * 1000.f / actual_send_time;
 
 	media_enable_nack(ftl, mc->ssrc, TRUE);
 	ftl_set_state(ftl, FTL_TX_PING_PKTS);
 
+	ftl_clear_state(ftl, FTL_SPEED_TEST);
 
-	return effective_kbps;
+	return retval;
 }
 
 int media_send_audio(ftl_stream_configuration_private_t *ftl, int64_t dts_usec, uint8_t *data, int32_t len) {
@@ -803,6 +838,7 @@ OS_THREAD_ROUTINE recv_thread(void *data)
 	unsigned char *buf;
 	struct sockaddr_in remote_addr;
 	socklen_t addr_len;
+	char remote_ip[INET_ADDRSTRLEN];
 
 #ifdef _WIN32
 	if (!SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL)) {
@@ -825,9 +861,13 @@ OS_THREAD_ROUTINE recv_thread(void *data)
 			continue;
 		}
 
-		if (remote_addr.sin_addr.s_addr != inet_addr(ftl->ingest_ip))
+		if (inet_ntop(AF_INET, &remote_addr.sin_addr.s_addr, remote_ip, sizeof(remote_ip)) == NULL) {
+			continue;
+		}
+
+		if (strcmp(remote_ip, ftl->ingest_ip) != 0)
 		{
-			FTL_LOG(ftl, FTL_LOG_WARN, "Discarded packet from unexpected ip: %s\n", inet_ntoa(remote_addr.sin_addr));
+			FTL_LOG(ftl, FTL_LOG_WARN, "Discarded packet from unexpected ip: %s\n", remote_ip);
 			continue;
 		}
 
@@ -883,9 +923,20 @@ OS_THREAD_ROUTINE recv_thread(void *data)
 
 			struct timeval now;
 			int delay_ms;
+			media_stats_t *pkt_stats = &ftl->video.media_component.stats;
 
 			gettimeofday(&now, NULL);
 			delay_ms = timeval_subtract_to_ms(&now, &ping->xmit_time);
+
+			if (delay_ms > pkt_stats->pkt_rtt_max) {
+				pkt_stats->pkt_rtt_max = delay_ms;
+			}
+			else if (delay_ms < pkt_stats->pkt_rtt_min) {
+				pkt_stats->pkt_rtt_min = delay_ms;
+			}
+
+			pkt_stats->total_rtt += delay_ms;
+			pkt_stats->rtt_samples++;
 
 			ftl->media.last_rtt_delay = delay_ms;
 		}
@@ -998,49 +1049,70 @@ static void _update_xmit_level(ftl_stream_configuration_private_t *ftl, int *tra
 }
 
 static int _update_stats(ftl_stream_configuration_private_t *ftl) {
-	struct timeval now, delta;
+	struct timeval now;
 	gettimeofday(&now, NULL);
-	timeval_subtract(&delta, &now, &ftl->media.stats_tv);
-	float stats_interval = timeval_to_ms(&delta);
+	int stats_interval = timeval_subtract_to_ms(&now, &ftl->media.stats_tv);
 
 	if (stats_interval > 5000) {
 
 		ftl->media.stats_tv = now;
 
 		_send_pkt_stats(ftl, &ftl->video.media_component, stats_interval);
-		//_send_pkt_stats(ftl, &ftl->audio.media_component);
+		_send_instant_pkt_stats(ftl, &ftl->video.media_component, stats_interval);
 		_send_video_stats(ftl, &ftl->video.media_component, stats_interval);
-
-		//_clear_stats(&ftl->video.media_component.stats);
 	}
 
 	return 0;
 }
 
-static int _send_pkt_stats(ftl_stream_configuration_private_t *ftl, ftl_media_component_common_t *mc, float interval_ms) {
+static int _send_pkt_stats(ftl_stream_configuration_private_t *ftl, ftl_media_component_common_t *mc, int interval_ms) {
 	ftl_status_msg_t m;
 	m.type = FTL_STATUS_VIDEO_PACKETS;
+	ftl_packet_stats_msg_t *p = &m.msg.pkt_stats;
+	struct timeval now;
 
-	m.msg.pkt_stats.period = (int)interval_ms;
-	m.msg.pkt_stats.sent = mc->stats.packets_sent;
-	m.msg.pkt_stats.nack_reqs = mc->stats.nack_requests;
-	m.msg.pkt_stats.lost = 0; // needs rtcp reports to get this value
-	m.msg.pkt_stats.recovered; // need rtcp reports to get this value
-	m.msg.pkt_stats.late; // need rtcp reports to get this value
-	m.msg.pkt_stats.min_xmit_delay = mc->stats.pkt_xmit_delay_min;
-	m.msg.pkt_stats.max_xmit_delay = mc->stats.pkt_xmit_delay_max;
-	m.msg.pkt_stats.avg_xmit_delay = mc->stats.total_xmit_delay / mc->stats.xmit_delay_samples;
-
-	mc->stats.pkt_xmit_delay_max = 0;
-	mc->stats.pkt_xmit_delay_min = 10000;
-	mc->stats.nack_requests = 0;
+	gettimeofday(&now, NULL);
+	p->period = timeval_subtract_to_ms(&now, &mc->stats.start_time);
+	p->sent = mc->stats.packets_sent;
+	p->nack_reqs = mc->stats.nack_requests;
+	p->lost = 0; // needs rtcp reports to get this value
+	p->recovered = 0; // need rtcp reports to get this value
+	p->late = 0; // need rtcp reports to get this value
 
 	enqueue_status_msg(ftl, &m);
 
 	return 0;
 }
 
-static int _send_video_stats(ftl_stream_configuration_private_t *ftl, ftl_media_component_common_t *mc, float interval_ms) {
+static int _send_instant_pkt_stats(ftl_stream_configuration_private_t *ftl, ftl_media_component_common_t *mc, int interval_ms) {
+	ftl_status_msg_t m;
+	m.type = FTL_STATUS_VIDEO_PACKETS_INSTANT;
+	ftl_packet_stats_instant_msg_t *p = &m.msg.ipkt_stats;
+
+	p->period = (int)interval_ms;
+	p->min_rtt = mc->stats.pkt_rtt_min;
+	p->max_rtt = mc->stats.pkt_rtt_max;
+	p->avg_rtt = (mc->stats.rtt_samples) ? mc->stats.total_rtt / mc->stats.rtt_samples : 0;
+	p->min_xmit_delay = mc->stats.pkt_xmit_delay_min;
+	p->max_xmit_delay = mc->stats.pkt_xmit_delay_max;
+	p->avg_xmit_delay = (mc->stats.xmit_delay_samples) ? mc->stats.total_xmit_delay / mc->stats.xmit_delay_samples : 0;
+
+	mc->stats.pkt_xmit_delay_max = 0;
+	mc->stats.pkt_xmit_delay_min = 10000;
+	mc->stats.total_xmit_delay = 0;
+	mc->stats.xmit_delay_samples = 0;
+
+	mc->stats.pkt_rtt_max = 0;
+	mc->stats.pkt_rtt_min = 10000;
+	mc->stats.total_rtt = 0;
+	mc->stats.rtt_samples = 0;
+
+	enqueue_status_msg(ftl, &m);
+
+	return 0;
+}
+
+static int _send_video_stats(ftl_stream_configuration_private_t *ftl, ftl_media_component_common_t *mc, int interval_ms) {
 	ftl_status_msg_t m;
 	ftl_video_frame_stats_msg_t *v = &m.msg.video_stats;
 	struct timeval now;

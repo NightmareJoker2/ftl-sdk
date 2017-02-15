@@ -24,6 +24,7 @@
 #include "ftl.h"
 #include "ftl_private.h"
 #include "hmac/hmac.h"
+#include <ctype.h>
 
 /*
     Please note that throughout the code, we send "\r\n\r\n", where a normal newline ("\n") would suffice.
@@ -176,7 +177,6 @@ BOOL ftl_get_state(ftl_stream_configuration_private_t *ftl, ftl_state_t state) {
 
 }
 
-
 BOOL is_legacy_ingest(ftl_stream_configuration_private_t *ftl) {
 	return ftl->media.assigned_port == FTL_UDP_MEDIA_PORT;
 }
@@ -260,3 +260,34 @@ ftl_status_t dequeue_status_msg(ftl_stream_configuration_private_t *ftl, ftl_sta
 	return retval;
 }
 
+ftl_status_t _set_ingest_ip(ftl_stream_configuration_private_t *ftl) {
+	char *ingest_ip = NULL;
+	ftl_status_t ret_status = FTL_SUCCESS;
+
+	do {
+		if (!isdigit(ftl->ingest_hostname[0])) {
+#ifndef DISABLE_AUTO_INGEST
+			if (strcmp(ftl->ingest_hostname, "auto") == 0) {
+				ingest_ip = ingest_find_best(ftl);
+			}
+			else
+#endif
+			{
+				ingest_ip = ingest_get_ip(ftl, ftl->ingest_hostname);
+			}
+
+			if (ingest_ip == NULL) {
+				ret_status = FTL_DNS_FAILURE;
+				break;
+			}
+		}
+		else {
+			ingest_ip = _strdup(ftl->ingest_hostname);
+		}
+
+		strcpy_s(ftl->ingest_ip, sizeof(ftl->ingest_ip), ingest_ip);
+		free(ingest_ip);
+	} while (0);
+
+	return ret_status;
+}

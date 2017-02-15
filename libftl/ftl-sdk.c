@@ -2,7 +2,9 @@
 #define __FTL_INTERNAL
 #include "ftl.h"
 #include "ftl_private.h"
+#ifndef DISABLE_AUTO_INGEST
 #include "curl.h"
+#endif
 
 static BOOL _get_chan_id_and_key(const char *stream_key, uint32_t *chan_id, char *key);
 static int _lookup_ingest_ip(const char *ingest_location, char *ingest_ip);
@@ -10,13 +12,15 @@ static int _lookup_ingest_ip(const char *ingest_location, char *ingest_ip);
 char error_message[1000];
 FTL_API const int FTL_VERSION_MAJOR = 0;
 FTL_API const int FTL_VERSION_MINOR = 8;
-FTL_API const int FTL_VERSION_MAINTENANCE = 5;
+FTL_API const int FTL_VERSION_MAINTENANCE = 13;
 
 // Initializes all sublibraries used by FTL
 FTL_API ftl_status_t ftl_init() {
   init_sockets();
   os_init();
+#ifndef DISABLE_AUTO_INGEST
   curl_global_init(CURL_GLOBAL_ALL);
+#endif
   return FTL_SUCCESS;
 }
 
@@ -78,24 +82,10 @@ FTL_API ftl_status_t ftl_ingest_create(ftl_handle_t *ftl_handle, ftl_ingest_para
 	  }
 
 	  os_init_mutex(&ftl->state_mutex);
+	  os_init_mutex(&ftl->disconnect_mutex);
 	  ftl_set_state(ftl, FTL_STATUS_QUEUE);
 
-	  char *ingest_ip = NULL;
-
-	  if (strcmp(params->ingest_hostname, "auto") == 0) {
-		  ingest_ip = ingest_find_best(ftl);
-	  }
-	  else {
-		  ingest_ip = ingest_get_ip(ftl, params->ingest_hostname);
-	  }
-
-	  if (ingest_ip == NULL) {
-		  ret_status = FTL_DNS_FAILURE;
-		  break;
-	  }
-
-	  strcpy_s(ftl->ingest_ip, sizeof(ftl->ingest_ip), ingest_ip);
-	  free(ingest_ip);
+	  ftl->ingest_hostname = _strdup(params->ingest_hostname);
 
 	  ftl_handle->priv = ftl;
 	  return ret_status;
@@ -148,6 +138,15 @@ FTL_API ftl_status_t ftl_ingest_update_params(ftl_handle_t *ftl_handle, ftl_inge
 
 	ftl->video.media_component.peak_kbps = params->peak_kbps;
 
+	if (params->ingest_hostname != NULL) {
+		if (ftl->ingest_hostname != NULL) {
+			free(ftl->ingest_hostname);
+			ftl->ingest_hostname = NULL;
+		}
+
+		ftl->ingest_hostname = _strdup(params->ingest_hostname);
+	}
+
 	/* not going to update fps for the moment*/
 	/*
 	ftl->video.fps_num = params->fps_num;
@@ -161,9 +160,22 @@ FTL_API int ftl_ingest_speed_test(ftl_handle_t *ftl_handle, int speed_kbps, int 
 
 	ftl_stream_configuration_private_t *ftl = (ftl_stream_configuration_private_t *)ftl_handle->priv;
 
-	int peak_bw = media_speed_test(ftl, speed_kbps, duration_ms);
+	speed_test_t results;
 
-	return peak_bw;
+	FTL_LOG(ftl, FTL_LOG_WARN, "%s() is depricated, please use ftl_ingest_speed_test_ex()\n", __FUNCTION__);
+
+	if (media_speed_test(ftl, speed_kbps, duration_ms, &results) == FTL_SUCCESS) {
+		return results.peak_kbps;
+	}
+
+	return -1;
+}
+
+FTL_API ftl_status_t ftl_ingest_speed_test_ex(ftl_handle_t *ftl_handle, int speed_kbps, int duration_ms, speed_test_t *results) {
+
+	ftl_stream_configuration_private_t *ftl = (ftl_stream_configuration_private_t *)ftl_handle->priv;
+
+	return media_speed_test(ftl, speed_kbps, duration_ms, results);
 }
 
 FTL_API int ftl_ingest_send_media_dts(ftl_handle_t *ftl_handle, ftl_media_type_t media_type, int64_t dts_usec, uint8_t *data, int32_t len, int end_of_frame) {
@@ -209,21 +221,24 @@ FTL_API int ftl_ingest_send_media(ftl_handle_t *ftl_handle, ftl_media_type_t med
 
 FTL_API ftl_status_t ftl_ingest_disconnect(ftl_handle_t *ftl_handle) {
 	ftl_stream_configuration_private_t *ftl = (ftl_stream_configuration_private_t *)ftl_handle->priv;
-	ftl_status_t status_code;
+	ftl_status_t status_code = FTL_SUCCESS;
 
-	if (!ftl_get_state(ftl, FTL_CONNECTED)) {
-		return FTL_SUCCESS;
+	os_lock_mutex(&ftl->disconnect_mutex);
+
+	if (ftl_get_state(ftl, FTL_CONNECTED)) {
+
+		status_code = internal_ingest_disconnect(ftl);
+
+		ftl_status_msg_t status;
+		status.type = FTL_STATUS_EVENT;
+		status.msg.event.reason = FTL_STATUS_EVENT_REASON_API_REQUEST;
+		status.msg.event.type = FTL_STATUS_EVENT_TYPE_DISCONNECTED;
+		status.msg.event.error_code = FTL_USER_DISCONNECT;
+
+		enqueue_status_msg(ftl, &status);
 	}
 
-	status_code = internal_ingest_disconnect(ftl);
-
-	ftl_status_msg_t status;
-	status.type = FTL_STATUS_EVENT;
-	status.msg.event.reason = FTL_STATUS_EVENT_REASON_API_REQUEST;
-	status.msg.event.type = FTL_STATUS_EVENT_TYPE_DISCONNECTED;
-	status.msg.event.error_code = FTL_USER_DISCONNECT;
-
-	enqueue_status_msg(ftl, &status);
+	os_unlock_mutex(&ftl->disconnect_mutex);
 
 	return status_code;
 }
@@ -231,6 +246,8 @@ FTL_API ftl_status_t ftl_ingest_disconnect(ftl_handle_t *ftl_handle) {
 ftl_status_t internal_ingest_disconnect(ftl_stream_configuration_private_t *ftl) {
 
 	ftl_status_t status_code;
+		
+	ftl_set_state(ftl, FTL_DISCONNECT_IN_PROGRESS);
 
 	if ((status_code = _ingest_disconnect(ftl)) != FTL_SUCCESS) {
 		FTL_LOG(ftl, FTL_LOG_ERROR, "Disconnect failed with error %d\n", status_code);
@@ -240,6 +257,9 @@ ftl_status_t internal_ingest_disconnect(ftl_stream_configuration_private_t *ftl)
 		FTL_LOG(ftl, FTL_LOG_ERROR, "failed to clean up media channel with error %d\n", status_code);
 	}
 
+	ftl_clear_state(ftl, FTL_DISCONNECT_IN_PROGRESS);
+
+		
 	return FTL_SUCCESS;
 }
 
@@ -262,7 +282,7 @@ ftl_status_t internal_ftl_ingest_destroy(ftl_stream_configuration_private_t *ftl
 		
 		int	wait_retries = 5;
 		while (ftl->status_q.thread_waiting && wait_retries-- > 0) {
-			sleep_ms(5);
+			sleep_ms(10);
 		};
 
 		if (ftl->status_q.thread_waiting) {
@@ -288,6 +308,10 @@ ftl_status_t internal_ftl_ingest_destroy(ftl_stream_configuration_private_t *ftl
 
 		if (ftl->key != NULL) {
 			free(ftl->key);
+		}
+
+		if (ftl->ingest_hostname != NULL) {
+			free(ftl->ingest_hostname);
 		}
 
 		free(ftl);
@@ -364,6 +388,10 @@ char* ftl_status_code_to_string(ftl_status_t status) {
 		return "ftl ingest disconnect api was called";
 	case FTL_INGEST_NO_RESPONSE:
 		return "ingest did not respond to request";
+	case FTL_NO_PING_RESPONSE:
+		return "ingest did not respond to keepalive";
+	case FTL_SPEED_TEST_ABORTED:
+		return "the speed test was aborted, possibly due to a network interruption";
 	case FTL_UNKNOWN_ERROR_CODE:
 	default:
 		/* Unknown FTL error */
