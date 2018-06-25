@@ -1,0 +1,10 @@
+#!/bin/bash
+set -ue
+
+./publish/ftl_app \
+  -i auto \
+  -s "$MIXER_STREAMER_KEY" \
+  -v vid/sintel.h264 \
+  -a vid/sintel.opus \
+  -f 24
+
