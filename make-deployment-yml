@@ -38,4 +38,6 @@ spec:
           env:
           - name: MIXER_STREAMER_KEY
             value: "$MIXER_STREAMER_KEY"
+      imagePullSecrets:
+        - name: docker-secret
 EOF
