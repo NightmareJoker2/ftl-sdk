@@ -6,5 +6,5 @@ exec ./publish/ftl_app \
   -s "$MIXER_STREAMER_KEY" \
   -v vid/sintel.h264 \
   -a vid/sintel.opus \
-  -f 24
+  -f $FPS
 
