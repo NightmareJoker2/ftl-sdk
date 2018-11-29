@@ -2,7 +2,7 @@
 set -ue
 
 INGEST="${INGEST:=auto}"
-FPS="${FPS:=24}"
+FPS="${FPS:=30}"
 
 echo "streaming to $INGEST"
 echo "FPS (or whatever the -f parameter actually takes) = $FPS"
