@@ -1,16 +1,16 @@
 #!/bin/bash
 set -ue
 
-INGEST="${INGEST:=auto}"
-FPS="${FPS:=24}"
+: "${INGEST:=auto}"
+: "${FPS:=24000:1001}"
 
 echo "streaming to $INGEST"
-echo "FPS (or whatever the -f parameter actually takes) = $FPS"
+echo "FPS = $FPS"
 
 exec ./publish/ftl_app \
   -i "$INGEST" \
   -s "$MIXER_STREAMER_KEY" \
-  -v vid/sintel.h264 \
-  -a vid/sintel.opus \
+  -v vid/video.h264 \
+  -a vid/audio.opus \
   -f "$FPS"
 

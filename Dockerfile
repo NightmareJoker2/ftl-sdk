@@ -9,6 +9,8 @@ RUN apt-get install libssl-dev -y
 RUN apt-get install libcurl4-openssl-dev -y
 RUN apt-get upgrade ca-certificates -y
 
+RUN apt-get install -y jq curl
+
 RUN useradd ftl-user
 
 RUN mkdir -p /opt/ftl-sdk/vid
@@ -17,18 +19,21 @@ RUN chown -R ftl-user:ftl-user /opt/ftl-sdk
 
 WORKDIR /opt/ftl-sdk/vid
 
-RUN wget https://videotestmedia.blob.core.windows.net/ftl/sintel.h264
-RUN wget https://videotestmedia.blob.core.windows.net/ftl/sintel.opus
+ARG VIDEO_URL=https://videotestmedia.blob.core.windows.net/ftl/sintel.h264
+RUN wget ${VIDEO_URL}
+ARG AUDIO_URL=https://videotestmedia.blob.core.windows.net/ftl/sintel.opus
+RUN wget ${AUDIO_URL}
 
-COPY . /opt/ftl-sdk
+RUN mv *.h264 video.h264
+RUN mv *.opus audio.opus
 
-RUN chown -R ftl-user:ftl-user /opt/ftl-sdk
+COPY --chown=ftl-user:ftl-user . /opt/ftl-sdk
 
 USER ftl-user
 
 WORKDIR /opt/ftl-sdk
 
-RUN ./build
+RUN ./scripts/build
 
 ENTRYPOINT ["./start-stream"]
 

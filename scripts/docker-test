@@ -1,0 +1,18 @@
+#!/bin/bash
+set -ue
+
+: "${DOCKER_TAG:=ftl-sdk}"
+
+main () {
+  docker run \
+    --rm \
+    -e MIXER_STREAMER_KEY \
+    -e CHANNEL \
+    -e INGEST \
+    -e FPS \
+    --entrypoint ./scripts/test \
+    "$DOCKER_TAG"
+}
+
+main
+
