@@ -1,9 +1,6 @@
 #!/bin/bash
 set -ue
 
-git submodule init
-git submodule update
-
 BUILD_DIR='build-output'
 mkdir -p "$BUILD_DIR"
 pushd "$BUILD_DIR"
