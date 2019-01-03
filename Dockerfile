@@ -27,13 +27,23 @@ RUN wget ${AUDIO_URL}
 RUN mv *.h264 video.h264
 RUN mv *.opus audio.opus
 
-COPY --chown=ftl-user:ftl-user . /opt/ftl-sdk
+COPY --chown=ftl-user:ftl-user ./CMakeLists.txt /opt/ftl-sdk/CMakeLists.txt
+COPY --chown=ftl-user:ftl-user ./libcurl /opt/ftl-sdk/libcurl
+COPY --chown=ftl-user:ftl-user ./libjansson /opt/ftl-sdk/libjansson
+COPY --chown=ftl-user:ftl-user ./libftl /opt/ftl-sdk/libftl
+COPY --chown=ftl-user:ftl-user ./Doxyfile /opt/ftl-sdk/Doxyfile
+COPY --chown=ftl-user:ftl-user ./ftl_app /opt/ftl-sdk/ftl_app
+COPY --chown=ftl-user:ftl-user ./get-video /opt/ftl-sdk/get-video
+COPY --chown=ftl-user:ftl-user ./get-audio /opt/ftl-sdk/get-audio
+COPY --chown=ftl-user:ftl-user ./scripts /opt/ftl-sdk/scripts
 
 USER ftl-user
 
 WORKDIR /opt/ftl-sdk
 
 RUN ./scripts/build
+
+COPY --chown=ftl-user:ftl-user ./start-stream /opt/ftl-sdk/start-stream
 
 ENTRYPOINT ["./start-stream"]
 
