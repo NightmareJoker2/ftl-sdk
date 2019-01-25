@@ -9,7 +9,7 @@ CONTAINER_ID=$(docker create "$DOCKER_TAG")
 rm -rf publish
 
 echo "> docker cp ${CONTAINER_ID}:/opt/ftl-sdk/publish ."
-docker cp ${CONTAINER_ID}:/opt/ftl-sdk/publish .
+docker cp "${CONTAINER_ID}:/opt/ftl-sdk/publish" .
 
 echo "> docker rm $CONTAINER_ID"
 docker rm "$CONTAINER_ID"

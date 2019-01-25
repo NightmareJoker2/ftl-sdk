@@ -5,7 +5,7 @@ fail () {
   local error_message="$1"
   local exit_code=$2
   echo "$error_message" >&2
-  exit $exit_code
+  exit "$exit_code"
 }
 
 check_dependency () {
@@ -49,13 +49,13 @@ main () {
   local max_wait=300
   local sleep_duration=5
   local i=0
-  echo "wait for channel ${CHANNEL} to go offline"
+  echo "wait for channel ${CHANNEL:?} to go offline"
   until channel_offline "$CHANNEL"; do
     echo .
     sleep $sleep_duration
     (( i += sleep_duration ))
     if [ $i -gt $max_wait ]; then
-      echo "channel ${channel} still online after ${max_wait} sec."
+      echo "channel ${CHANNEL} still online after ${max_wait} sec."
       echo "exiting."
       exit 42
     fi
