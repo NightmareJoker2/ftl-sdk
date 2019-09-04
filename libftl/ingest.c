@@ -256,10 +256,13 @@ OS_THREAD_ROUTINE _ingest_get_hosts(ftl_stream_configuration_private_t *ftl) {
     printf("curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
     goto cleanup;
   }
+ printf("here0");
 
   if ((ingests = json_loadb(chunk.memory, chunk.size, 0, &error)) == NULL) {
     goto cleanup;
   }
+
+  printf("here1");
   
   size_t size = json_array_size(ingests);
 
@@ -269,6 +272,8 @@ OS_THREAD_ROUTINE _ingest_get_hosts(ftl_stream_configuration_private_t *ftl) {
   if (json_unpack(ingest_item, "{s:s, s:s, s:s}", "name", &name, "ip", &ip, "hostname", &hostname) < 0) {
     continue;
   }
+
+  printf("here2");
 
     ftl_ingest_t *ingest_elmt;
 
