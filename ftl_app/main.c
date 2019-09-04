@@ -209,7 +209,7 @@ int main(int argc, char **argv)
 
   if ((status_code = ftl_ingest_connect(&handle)) != FTL_SUCCESS)
   {
-    printf("Failed to connect to ingest %s: %s\n", ingest_location, ftl_status_code_to_string(status_code));
+    printf("Failed to connect to ingest: %s\n", ftl_status_code_to_string(status_code));
     return -1;
   }
 #ifdef _WIN32

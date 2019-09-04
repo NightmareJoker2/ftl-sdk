@@ -280,6 +280,8 @@ OS_THREAD_ROUTINE _ingest_get_hosts(ftl_stream_configuration_private_t *ftl) {
   ingest_elmt->ip = _strdup(ip);
   ingest_elmt->hostname = _strdup(hostname);
 
+  printf("%s, %s, %s\n", name, ip, hostname);
+
     ingest_elmt->rtt = 500;
 
     ingest_elmt->next = NULL;
