@@ -35,6 +35,7 @@
 #include <sys/time.h>
 #endif
 #include "file_parser.h"
+#include <string.h>
 
 void sleep_ms(int ms)
 {
